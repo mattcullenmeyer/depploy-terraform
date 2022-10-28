@@ -123,7 +123,6 @@ resource "aws_cloudfront_distribution" "main" {
     response_page_path    = "/index.html"
   }
 
-  retain_on_delete    = true
   wait_for_deployment = false
 }
 

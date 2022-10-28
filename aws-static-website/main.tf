@@ -1,5 +1,8 @@
 locals {
   full_domain_name = var.subdomain != "" ? "${var.subdomain}.${var.root_domain}" : "${var.root_domain}"
+
+  # https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-managed-cache-policies.html
+  managed_caching_optimized_id = "658327ea-f89d-4fab-a63d-7e88639e58f6"
 }
 
 # https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/acm_certificate
@@ -63,4 +66,75 @@ resource "aws_s3_bucket_public_access_block" "main" {
   block_public_policy     = true
   ignore_public_acls      = true
   restrict_public_buckets = true
+}
+
+# https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_origin_access_identity
+resource "aws_cloudfront_origin_access_identity" "main" {}
+
+# https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_distribution
+resource "aws_cloudfront_distribution" "main" {
+  origin {
+    domain_name = aws_s3_bucket.main.bucket_regional_domain_name
+    origin_id   = aws_s3_bucket.main.id
+
+    s3_origin_config {
+      origin_access_identity = aws_cloudfront_origin_access_identity.main.cloudfront_access_identity_path
+    }
+  }
+
+  enabled             = true
+  default_root_object = "index.html"
+  aliases             = [local.full_domain_name]
+
+  default_cache_behavior {
+    allowed_methods        = ["GET", "HEAD"]
+    cached_methods         = ["GET", "HEAD"]
+    target_origin_id       = aws_s3_bucket.main.id
+    cache_policy_id        = local.managed_caching_optimized_id
+    viewer_protocol_policy = "redirect-to-https"
+    compress               = true
+  }
+
+  price_class = "PriceClass_All"
+
+  restrictions {
+    geo_restriction {
+      restriction_type = "none"
+    }
+  }
+
+  viewer_certificate {
+    acm_certificate_arn      = aws_acm_certificate.main.arn
+    ssl_support_method       = "sni-only"
+    minimum_protocol_version = "TLSv1.2_2021"
+  }
+
+  custom_error_response {
+    error_caching_min_ttl = 10
+    error_code            = 404
+    response_code         = 200
+    response_page_path    = "/index.html"
+  }
+
+  custom_error_response {
+    error_caching_min_ttl = 10
+    error_code            = 403
+    response_code         = 200
+    response_page_path    = "/index.html"
+  }
+
+  retain_on_delete    = true
+  wait_for_deployment = false
+}
+
+resource "aws_route53_record" "cloudfront" {
+  zone_id = data.aws_route53_zone.main.zone_id
+  name    = local.full_domain_name
+  type    = "A"
+
+  alias {
+    name                   = aws_cloudfront_distribution.main.domain_name
+    zone_id                = aws_cloudfront_distribution.main.hosted_zone_id
+    evaluate_target_health = false
+  }
 }
